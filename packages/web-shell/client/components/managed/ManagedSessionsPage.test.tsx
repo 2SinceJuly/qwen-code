@@ -8,6 +8,10 @@ import { JavaManagedAgentHttpError } from './java-managed-agent-client';
 import { getManagedClientId } from './managed-session-storage';
 import { webcrypto } from 'node:crypto';
 import { pendingQuestion } from './managed-question.test-fixtures';
+import {
+  sideQuery,
+  sideQueryContext,
+} from './managed-side-query.test-fixtures';
 import * as pendingStorage from './managed-pending-storage';
 import { I18nProvider } from '../../i18n';
 import type {
@@ -169,7 +173,9 @@ import { ManagedSessionsPage } from './ManagedSessionsPage';
 import { artifact, result } from './managed-tool-result.test-fixtures';
 import { task, taskOperation } from './managed-task.test-fixtures';
 import {
+  diagnosticContext,
   diagnosticResources,
+  diagnosticStats,
   diagnosticTrace,
 } from './managed-diagnostics.test-fixtures';
 
@@ -322,14 +328,86 @@ describe('ManagedSessionsPage', () => {
     });
   }
 
+  it('intercepts BTW and recap before main-task busy and queue admission', async () => {
+    const create = vi.fn().mockImplementation(async (_sessionId, request) => ({
+      ...sideQuery,
+      queryId: request.kind === 'recap' ? 'recap-1' : 'btw-1',
+      kind: request.kind,
+      trigger: request.trigger ?? 'manual',
+      question: request.question ?? null,
+    }));
+    const queue = vi.fn();
+    provider = {
+      ...provider,
+      userMessages: {
+        query: vi.fn().mockResolvedValue({ paused: false, messages: [] }),
+        command: queue,
+      },
+      sideQueries: {
+        context: vi.fn().mockResolvedValue(sideQueryContext),
+        list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+        create,
+        get: vi.fn(),
+        stream: vi.fn().mockImplementation(async function* () {}),
+        cancel: vi.fn(),
+      },
+    };
+    mocks.client.getSession.mockResolvedValue(
+      summary('s1', {
+        phase: 'agent_running',
+        capabilities: {
+          canSend: false,
+          canCancel: true,
+          btw: true,
+          recap: true,
+        },
+      }),
+    );
+    await render('s1');
+    await act(async () => {
+      mocks.editorProps!.onSubmit(
+        '/btw private follow-up',
+        undefined,
+        undefined,
+        mocks.commitAccepted,
+      );
+      await flush();
+    });
+    expect(create).toHaveBeenCalledWith(
+      's1',
+      { kind: 'btw', question: 'private follow-up' },
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
+    );
+    expect(queue).not.toHaveBeenCalled();
+    expect(mocks.client.submitPrompt).not.toHaveBeenCalled();
+    await act(async () => {
+      mocks.editorProps!.onSubmit(
+        '/recap',
+        undefined,
+        undefined,
+        mocks.commitAccepted,
+      );
+      await flush();
+    });
+    expect(create).toHaveBeenLastCalledWith(
+      's1',
+      { kind: 'recap', trigger: 'manual' },
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
+    );
+    expect(mocks.commitAccepted).toHaveBeenCalledTimes(2);
+    expect(mocks.client.cancel).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     'opens diagnostics in a read-only Session and closes them on owner change (home: %s)',
     async (home) => {
-      const getResources = vi.fn().mockResolvedValue(diagnosticResources);
+      const getContextUsage = vi.fn().mockResolvedValue(diagnosticContext);
       provider = {
         ...provider,
         diagnostics: {
-          getResources,
+          getContextUsage,
+          getStatistics: vi.fn().mockResolvedValue(diagnosticStats),
+          getResources: vi.fn().mockResolvedValue(diagnosticResources),
           listAgentTrace: vi.fn().mockResolvedValue(diagnosticTrace),
         },
       };
@@ -341,33 +419,35 @@ describe('ManagedSessionsPage', () => {
       );
       const navigation = home ? null : undefined;
       await render('s1', 'en', provider, navigation, false);
-      expect(getResources).not.toHaveBeenCalled();
+      expect(getContextUsage).not.toHaveBeenCalled();
       const button = [...container.querySelectorAll('button')].find(
         (item) => item.textContent === 'Session diagnostics',
       );
       expect(button).toBeDefined();
       await act(async () => button!.click());
       expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-        'manual-skill',
+        'model-a',
       );
-      const signal = getResources.mock.calls[0][1].signal as AbortSignal;
+      const signal = getContextUsage.mock.calls[0][1].signal as AbortSignal;
       await render('s2', 'en', provider, navigation, false);
       expect(signal.aborted).toBe(true);
       expect(document.querySelector('[role="dialog"]')).toBeNull();
       await render('s1', 'en', provider, navigation, false);
       expect(document.querySelector('[role="dialog"]')).toBeNull();
-      expect(getResources).toHaveBeenCalledTimes(1);
+      expect(getContextUsage).toHaveBeenCalledTimes(1);
       expect(mocks.client.submitPrompt).not.toHaveBeenCalled();
     },
   );
 
   it('clears diagnostic content when the Session read loses permission', async () => {
     vi.useFakeTimers();
-    const getResources = vi.fn().mockResolvedValue(diagnosticResources);
+    const getContextUsage = vi.fn().mockResolvedValue(diagnosticContext);
     provider = {
       ...provider,
       diagnostics: {
-        getResources,
+        getContextUsage,
+        getStatistics: vi.fn().mockResolvedValue(diagnosticStats),
+        getResources: vi.fn().mockResolvedValue(diagnosticResources),
         listAgentTrace: vi.fn().mockResolvedValue(diagnosticTrace),
       },
     };
@@ -379,7 +459,7 @@ describe('ManagedSessionsPage', () => {
     await render('s1');
     await click('Session diagnostics');
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-      'manual-skill',
+      'model-a',
     );
     mocks.client.getSession.mockRejectedValue(
       new JavaManagedAgentHttpError(404, 'session_not_found', 'Not found'),
@@ -387,7 +467,7 @@ describe('ManagedSessionsPage', () => {
     await act(async () => vi.advanceTimersByTimeAsync(3_500));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(container.textContent).not.toContain('Session diagnostics');
-    expect(getResources.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(getContextUsage.mock.calls[0][1].signal.aborted).toBe(true);
   });
 
   it('opens only the host Session without catalog, creation, cancellation or daemon calls', async () => {
