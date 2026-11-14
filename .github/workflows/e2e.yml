@@ -752,8 +752,8 @@ jobs:
           # Same mapping as e2e-test-linux: InteractiveSession forwards these
           # into inheritEnv:false children, so the parity suites pin both arms
           # explicitly to override them.
-          QWEN_CODE_ENABLE_UNIFIED_AGENT_LOOP: "${{ matrix.agent-loop != 'current' && '1' || '' }}"
-          QWEN_CODE_ENABLE_EVENT_BUS_AGENT_LOOP: "${{ matrix.agent-loop == 'kernel' && '1' || '' }}"
+          QWEN_CODE_ENABLE_UNIFIED_AGENT_LOOP: "${{ matrix.agent-loop != 'current' && '1' || '0' }}"
+          QWEN_CODE_ENABLE_EVENT_BUS_AGENT_LOOP: "${{ matrix.agent-loop == 'kernel' && '1' || '0' }}"
         run: |-
           npx cross-env QWEN_E2E_RENDERER=opentui QWEN_SANDBOX=false vitest run --root ./integration-tests interactive --exclude '**/interactive/cron-interactive.test.ts' --exclude '**/channel-plugin.test.ts'
 
