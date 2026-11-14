@@ -3109,10 +3109,14 @@ export class GitWorktreeService {
   }
 
   /**
-   * Repo-root-relative paths tracked in `worktreePath`. Empty on failure: the
-   * overwrite guard is a safety net, and a git error should not stop the copy.
+   * Repo-root-relative paths tracked in `worktreePath`, or `null` when the
+   * listing is unavailable (git error, output over the capture cap). Callers
+   * must treat `null` as "skip the copy" — a guard that cannot see the
+   * destination must not wave entries through.
    */
-  private async listTrackedPaths(worktreePath: string): Promise<Set<string>> {
+  private async listTrackedPaths(
+    worktreePath: string,
+  ): Promise<Set<string> | null> {
     try {
       const { stdout } = await runGitCapture(worktreePath, [
         ...NO_EXEC_CONFIG,
@@ -3124,13 +3128,68 @@ export class GitWorktreeService {
       debugLogger.warn(
         `copyWorktreeIncludePaths: cannot list tracked paths in ${worktreePath}: ${error}`,
       );
-      return new Set();
+      return null;
     }
+  }
+
+  /**
+   * Subset of `relPaths` that git's ignore rules exclude in `worktreePath`
+   * (rule-based: the paths need not exist on disk), or `null` when the check
+   * cannot be completed. Unlike {@link listTrackedPaths} this is bounded by
+   * the caller's pattern cap, but `git check-ignore` exits 1 when nothing
+   * matches, which `runGitCapture` reports as a rejection.
+   */
+  private async listIgnoredPaths(
+    worktreePath: string,
+    relPaths: readonly string[],
+  ): Promise<Set<string> | null> {
+    const ignored = new Set<string>();
+    const chunkSize = 50;
+    for (let i = 0; i < relPaths.length; i += chunkSize) {
+      const chunk = relPaths.slice(i, i + chunkSize);
+      try {
+        const { stdout } = await runGitCapture(worktreePath, [
+          ...NO_EXEC_CONFIG,
+          '-c',
+          'core.quotepath=false',
+          'check-ignore',
+          '--',
+          ...chunk,
+        ]).catch((error: { code?: number | string; stdout?: string }) => {
+          // Exit 1 means "no path in this chunk is ignored", not a failure.
+          if (error?.code === 1) {
+            return { stdout: error.stdout ?? '', stderr: '' };
+          }
+          throw error;
+        });
+        for (const line of stdout.split('\n')) {
+          const p = line.trimEnd();
+          if (p) {
+            ignored.add(p.split('\\').join('/'));
+          }
+        }
+      } catch (error) {
+        debugLogger.warn(
+          `copyWorktreeIncludePaths: cannot check ignore state in ${worktreePath}: ${error}`,
+        );
+        return null;
+      }
+    }
+    return ignored;
   }
 
   /**
    * Copies the paths {@link resolveWorktreeIncludePaths} selected from the
    * source repo into `worktreePath`, preserving directory structure.
+   *
+   * The destination is checked out from its own revision (`qwen
+   * --worktree=#<N>` uses the PR head), which may neither track nor ignore a
+   * path the source ignores. Deny by default: a path is copied only when the
+   * destination's ignore rules exclude it — there it stays out of `git add
+   * -A` — and skipped when it is tracked, when it is not ignored, or when a
+   * listing is unavailable. The guarded key comes from the resolved
+   * destination path so a committed directory symlink cannot bypass the
+   * check by a different lexical name.
    *
    * Each entry is independent — one unreadable source does not stop the
    * rest — and the step never fails the worktree creation.
@@ -3140,22 +3199,18 @@ export class GitWorktreeService {
     relPaths: readonly string[],
     sourceRoot = this.sourceRepoPath,
   ): Promise<void> {
-    // The destination can be checked out from a different revision than the
-    // source (`qwen --worktree=#<N>` uses the PR head), so a path ignored here
-    // can be tracked there. Overwriting it would make the worktree diverge from
-    // the revision it was cut from, and a routine `git add -A` would commit the
-    // user's local secret onto that branch.
     const tracked = await this.listTrackedPaths(worktreePath);
+    const ignored = await this.listIgnoredPaths(worktreePath, relPaths);
+    if (!tracked || !ignored) {
+      debugLogger.warn(
+        `copyWorktreeIncludePaths: destination state unavailable in ${worktreePath}; skipping the copy`,
+      );
+      return;
+    }
     for (const relPath of relPaths) {
       try {
         const src = path.join(sourceRoot, relPath);
         const dst = path.join(worktreePath, relPath);
-        if (tracked.has(relPath)) {
-          debugLogger.warn(
-            `copyWorktreeIncludePaths: ${relPath} is tracked in ${worktreePath}; not overwriting it`,
-          );
-          continue;
-        }
         // `ls-files --others --ignored` reports an ignored symlink as an
         // ordinary entry and `copyFile` dereferences it, which would materialise
         // content from outside the repo as a regular, agent-readable file.
@@ -3167,7 +3222,10 @@ export class GitWorktreeService {
           continue;
         }
         // A committed directory symlink in the destination would make the
-        // mkdir/copy below write through it, outside the worktree.
+        // mkdir/copy below write through it, outside the worktree — and the
+        // tracked/ignored sets are keyed by repo-relative path, so the guard
+        // has to look at the path as the copy actually lands, not the
+        // caller's lexical spelling.
         const parent = path.dirname(dst);
         const realParent = await fs.realpath(parent).catch(async () => {
           await fs.mkdir(parent, { recursive: true });
@@ -3177,6 +3235,25 @@ export class GitWorktreeService {
         if (!isWithinRoot(realParent, realRoot)) {
           debugLogger.warn(
             `copyWorktreeIncludePaths: ${relPath} resolves outside ${worktreePath}; skipping it`,
+          );
+          continue;
+        }
+        const guardedRel = path
+          .relative(realRoot, path.join(realParent, path.basename(dst)))
+          .split(path.sep)
+          .join('/');
+        if (tracked.has(guardedRel)) {
+          debugLogger.warn(
+            `copyWorktreeIncludePaths: ${guardedRel} is tracked in ${worktreePath}; not overwriting it`,
+          );
+          continue;
+        }
+        // Untracked and not ignored would make the copy an ordinary
+        // untracked file: the very next `git add -A` (the setupWorktrees
+        // baseline runs one) would commit the user's local secret.
+        if (!ignored.has(guardedRel)) {
+          debugLogger.warn(
+            `copyWorktreeIncludePaths: ${guardedRel} is not ignored in ${worktreePath}; skipping it`,
           );
           continue;
         }

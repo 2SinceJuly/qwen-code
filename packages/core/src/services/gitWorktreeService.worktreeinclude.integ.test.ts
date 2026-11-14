@@ -31,7 +31,10 @@ const exists = (p: string) =>
     .then(() => true)
     .catch(() => false);
 
-const read = (p: string) => fs.readFile(p, 'utf8');
+const read = (p: string) =>
+  // Windows checkouts materialise LF blobs with CRLF working-tree endings;
+  // the assertions are about content, not line endings.
+  fs.readFile(p, 'utf8').then((s) => s.replace(/\r\n/g, '\n'));
 
 function gitIn(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir }).toString();
@@ -286,6 +289,42 @@ describe('GitWorktreeService.setupWorktrees() — .worktreeinclude', () => {
     expect(await read(path.join(wt, 'appsettings.json'))).toBe(
       '{"committed":true}\n',
     );
+  });
+
+  it('does not copy a path the destination revision does not ignore', async () => {
+    // `main` gains the ignore rule; `predates-rule` was cut before it, so a
+    // copy there would land as an ordinary untracked file — the baseline
+    // `git add --all` would commit the user's local secret.
+    await fs.writeFile(
+      path.join(repoRoot, '.gitignore'),
+      '.env\n.local/\nsecrets/*.json\nappsettings.json\n',
+    );
+    gitIn(repoRoot, 'add', '.gitignore');
+    gitIn(repoRoot, 'commit', '-q', '-m', 'ignore settings', '--no-verify');
+    gitIn(repoRoot, 'checkout', '-q', '-b', 'predates-rule', 'main~1');
+    gitIn(repoRoot, 'checkout', '-q', 'main');
+    await fs.writeFile(
+      path.join(repoRoot, 'appsettings.json'),
+      '{"secret":"LOCAL"}\n',
+    );
+    await fs.writeFile(
+      path.join(repoRoot, WORKTREE_INCLUDE_FILE),
+      'appsettings.json\n',
+    );
+    gitIn(repoRoot, 'add', '-f', WORKTREE_INCLUDE_FILE);
+    gitIn(repoRoot, 'commit', '-q', '-m', 'include list', '--no-verify');
+
+    const service = new GitWorktreeService(repoRoot, baseDir);
+    const result = await service.setupWorktrees({
+      sessionId: 's4',
+      sourceRepoPath: repoRoot,
+      worktreeNames: ['four'],
+      baseBranch: 'predates-rule',
+    });
+    expect(result.success).toBe(true);
+    const wt = result.worktrees[0].path;
+
+    expect(await exists(path.join(wt, 'appsettings.json'))).toBe(false);
   });
 
   it('reads the include file from the repository root, not the launch subdirectory', async () => {
