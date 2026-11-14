@@ -225,6 +225,28 @@ describe('daemon trust policy', () => {
     });
   });
 
+  it('fails closed when the dead folder-trust key has an invalid type', async () => {
+    installFiles({
+      '/config/user.json': JSON.stringify({
+        $version: 4,
+        security: { folderTrust: { featureEnabled: 'true' } },
+      }),
+      '/config/system.json': '{}',
+      '/config/trusted.json': '{}',
+    });
+
+    const decision = evaluateDaemonWorkspaceTrust(
+      await readDaemonTrustPolicySnapshot(),
+      '/work',
+    );
+
+    expect(decision).toMatchObject({
+      state: 'error',
+      targetTrusted: false,
+      error: { code: 'trust_policy_invalid', path: '/config/user.json' },
+    });
+  });
+
   it('uses system folder trust to enable over user', async () => {
     installFiles({
       '/config/user.json': JSON.stringify({

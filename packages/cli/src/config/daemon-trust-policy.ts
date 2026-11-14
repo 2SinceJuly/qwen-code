@@ -256,13 +256,23 @@ function folderTrustSetting(
   }
   const record = folderTrust as Record<string, unknown>;
   if (!('enabled' in record)) {
-    // Files a V1 file was migrated into before the dead target was known to be
-    // wrong carry `featureEnabled` and are already stamped at the current
-    // version, so the version-gated chain above never rewrites them. Read the
-    // leftover key here too: this snapshot is taken before `loadSettings`
-    // repairs the file, and answering "disabled" admits every workspace.
+    // A file the current V1 -> V2 chain migrates carries `featureEnabled` —
+    // the map still targets it — and is stamped at the current version, so
+    // the version-gated chain never rewrites it. Read the leftover key here
+    // too: this snapshot is taken before `loadSettings` repairs the file, and
+    // answering "disabled" admits every workspace.
     const legacy = record['featureEnabled'];
-    return typeof legacy === 'boolean' ? { value: legacy } : {};
+    if (typeof legacy === 'boolean') return { value: legacy };
+    if (legacy !== undefined) {
+      return {
+        error: policyError(
+          'trust_policy_invalid',
+          filePath,
+          new Error('`security.folderTrust.featureEnabled` must be a boolean.'),
+        ),
+      };
+    }
+    return {};
   }
   const enabled = record['enabled'];
   if (typeof enabled === 'boolean') return { value: enabled };
