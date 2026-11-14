@@ -479,7 +479,12 @@ function setFakeHome(home: string): () => void {
 // Helper to create async generator with chunks (avoids memory leak).
 // COMPRESSED events carry `info` instead of `value`.
 function createStreamWithChunks(
-  chunks: Array<{ type: unknown; value?: unknown; info?: unknown }>,
+  chunks: Array<{
+    type: unknown;
+    value?: unknown;
+    info?: unknown;
+    isContinuation?: boolean;
+  }>,
 ) {
   return (async function* () {
     for (const chunk of chunks) {

@@ -9675,7 +9675,7 @@ export class Session implements SessionContext {
     stopReason: PromptResponse['stopReason'];
     loopProtectionStopped?: boolean;
   }> {
-        const stopHookBlockingCap = this.config.getStopHookBlockingCap();
+    const stopHookBlockingCap = this.config.getStopHookBlockingCap();
     // Foreground prompts only: cron and background turns run without external
     // hooks, and channel turns deliver each response block as it ends.
     const interruptible = allowExternalHooks && !channelTurn;
