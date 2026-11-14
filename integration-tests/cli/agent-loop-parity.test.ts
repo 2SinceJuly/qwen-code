@@ -6,20 +6,20 @@
 
 /**
  * Headless runs each scripted scenario twice, with
- * `QWEN_CODE_ENABLE_UNIFIED_AGENT_LOOP` set to `0` and to `1`, and the two
- * runs must send the model the same requests and print the same stream-json
- * frames. Differences the shared loop makes on purpose are asserted separately
- * below.
+ * `experimental.unifiedAgentLoop` off and on, and the two runs must send the
+ * model the same requests and print the same stream-json frames. Differences
+ * the shared loop makes on purpose are asserted separately below.
  */
 
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { cpSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CONTAINER_SANDBOX_NO_PROXY,
   fakeServerHostOptions,
   IS_CONTAINER_SANDBOX,
+  readDebugLogs,
   TestRig,
 } from '../test-helper.js';
 import {
@@ -145,15 +145,7 @@ const runSubagent = (id: string) =>
   );
 
 function debugLog(runtimeDir: string): string {
-  const debugDir = join(runtimeDir, 'debug');
-  if (!existsSync(debugDir)) return '';
-  return (
-    readdirSync(debugDir, { recursive: true, withFileTypes: true })
-      // `latest` points at the session's own log.
-      .filter((entry) => entry.isFile() && basename(entry.name) !== 'latest')
-      .map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8'))
-      .join('')
-  );
+  return readDebugLogs(runtimeDir);
 }
 
 const toolResults = (messages: JsonObject[]) =>
@@ -332,10 +324,6 @@ describe('agent loop parity (experimental.unifiedAgentLoop)', () => {
       stdio: 'pipe',
       env: {
         ...process.env,
-        // Pin every arm rather than relying on the settings alone: once a
-        // surface defaults on, an unset variable no longer runs the other path.
-        QWEN_CODE_ENABLE_UNIFIED_AGENT_LOOP: shared ? '1' : '0',
-        QWEN_CODE_ENABLE_EVENT_BUS_AGENT_LOOP: kernel ? '1' : '0',
         QWEN_DEBUG_LOG_FILE: '1',
         QWEN_HOME: runtimeDir,
         QWEN_RUNTIME_DIR: runtimeDir,
