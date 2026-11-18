@@ -1300,6 +1300,12 @@ export default {
     'GitHub CLI (gh) 不可用或逾時。請改用完整 PR URL 直接綁定。',
   'Consolidate managed auto-memory topic files.': '整理託管自動記憶主題檔案',
   'Import MCP servers from Claude configs': '從 Claude 設定匯入 MCP 伺服器',
+  'Imported Claude instructions into {{targetPath}} ({{scope}} scope).':
+    '已將 Claude 指令匯入到 {{targetPath}}（{{scope}} 範圍）。',
+  'Claude instructions are already present in {{targetPath}}; nothing changed.':
+    '{{targetPath}} 中已存在 Claude 指令，未做改動。',
+  'No Claude instructions found. Checked: {{paths}}':
+    '未找到 Claude 指令。已檢查：{{paths}}',
   'Open MCP management dialog': '打開 MCP 管理對話框',
   'Could not retrieve tool registry.': '無法檢索工具註冊表',
   "Successfully authenticated and refreshed tools for '{{name}}'.":

@@ -11,6 +11,10 @@ import {
   type ClaudeMcpImportScope,
   type ClaudeMcpImportSource,
 } from '../../config/claudeMcpImport.js';
+import {
+  importClaudeInstructions,
+  type ClaudeInstructionsImportResult,
+} from '../../config/claude-instructions-import.js';
 import type {
   CommandContext,
   MessageActionReturn,
@@ -31,6 +35,7 @@ interface ParsedImportConfigArgs {
   source: ClaudeMcpImportSource;
   sourceExplicit: boolean;
   scope: ClaudeMcpImportScope;
+  instructions: boolean;
   help: boolean;
   error?: string;
 }
@@ -51,11 +56,23 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
   let source: ClaudeMcpImportSource = 'all';
   let sourceWasSet = false;
   let scope: ClaudeMcpImportScope = 'user';
+  let instructions = false;
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     if (token === '--help' || token === '-h' || token === 'help') {
-      return { source, sourceExplicit: sourceWasSet, scope, help: true };
+      return {
+        source,
+        sourceExplicit: sourceWasSet,
+        scope,
+        instructions,
+        help: true,
+      };
+    }
+
+    if (token === '--instructions') {
+      instructions = true;
+      continue;
     }
 
     if (token === '--from') {
@@ -65,6 +82,7 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
           source,
           sourceExplicit: sourceWasSet,
           scope,
+          instructions,
           help: false,
           error: t('Missing value for --from.'),
         };
@@ -75,6 +93,7 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
           source,
           sourceExplicit: sourceWasSet,
           scope,
+          instructions,
           help: false,
           error: t('Unknown import source: {{source}}', { source: value }),
         };
@@ -92,6 +111,7 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
           source,
           sourceExplicit: sourceWasSet,
           scope,
+          instructions,
           help: false,
           error: t('Unknown import source: {{source}}', { source: value }),
         };
@@ -109,6 +129,7 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
           source,
           sourceExplicit: sourceWasSet,
           scope,
+          instructions,
           help: false,
           error: t('Expected --scope to be "user" or "project".'),
         };
@@ -125,6 +146,7 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
           source,
           sourceExplicit: sourceWasSet,
           scope,
+          instructions,
           help: false,
           error: t('Expected --scope to be "user" or "project".'),
         };
@@ -144,12 +166,19 @@ export function parseImportConfigArgs(args: string): ParsedImportConfigArgs {
       source,
       sourceExplicit: sourceWasSet,
       scope,
+      instructions,
       help: false,
       error: t('Unknown argument: {{arg}}', { arg: token }),
     };
   }
 
-  return { source, sourceExplicit: sourceWasSet, scope, help: false };
+  return {
+    source,
+    sourceExplicit: sourceWasSet,
+    scope,
+    instructions,
+    help: false,
+  };
 }
 
 export function resolveImportSourceForScope(
@@ -168,7 +197,7 @@ function usage(): string {
     t('Import MCP servers from Claude configs.'),
     '',
     t(
-      'Usage: /import-config [all|claude-code|claude-desktop] [--scope user|project]',
+      'Usage: /import-config [all|claude-code|claude-desktop] [--scope user|project] [--instructions]',
     ),
     '',
     t('Examples:'),
@@ -176,6 +205,8 @@ function usage(): string {
     '  /import-config claude-code',
     '  /import-config claude-desktop --scope user',
     '  /import-config --scope project',
+    '  /import-config --instructions',
+    '  /import-config --instructions --scope project',
   ].join('\n');
 }
 
@@ -256,17 +287,51 @@ export function formatClaudeMcpImportResult(
   };
 }
 
+export function formatClaudeInstructionsImportResult(
+  result: ClaudeInstructionsImportResult,
+): MessageActionReturn {
+  const scopeLabel = result.scope === 'user' ? 'user' : 'project';
+  const written = result.action === 'created' || result.action === 'appended';
+  const messageType: 'info' | 'warning' =
+    result.action === 'no-source' ? 'warning' : 'info';
+
+  let content: string;
+  if (written) {
+    content = t(
+      'Imported Claude instructions into {{targetPath}} ({{scope}} scope).',
+      { targetPath: result.targetPath, scope: scopeLabel },
+    );
+  } else if (result.action === 'already-imported') {
+    content = t(
+      'Claude instructions are already present in {{targetPath}}; nothing changed.',
+      { targetPath: result.targetPath },
+    );
+  } else {
+    content = t('No Claude instructions found. Checked: {{paths}}', {
+      paths: result.checkedPaths.join(', '),
+    });
+  }
+
+  return {
+    type: 'message',
+    messageType,
+    content,
+  };
+}
+
 export const importConfigCommand: SlashCommand = {
   name: 'import-config',
   get description() {
     return t('Import MCP servers from Claude configs');
   },
-  argumentHint: '[all|claude-code|claude-desktop] [--scope user|project]',
+  argumentHint:
+    '[all|claude-code|claude-desktop] [--scope user|project] [--instructions]',
   examples: [
     '/import-config',
     '/import-config claude-code',
     '/import-config claude-desktop --scope user',
     '/import-config --scope project',
+    '/import-config --instructions',
   ],
   kind: CommandKind.BUILT_IN,
   supportedModes: ['interactive', 'non_interactive', 'acp'] as const,
@@ -305,6 +370,14 @@ export const importConfigCommand: SlashCommand = {
     }
 
     try {
+      if (parsed.instructions) {
+        return formatClaudeInstructionsImportResult(
+          importClaudeInstructions({
+            scope: parsed.scope,
+            cwd: context.services.config?.getTargetDir() ?? process.cwd(),
+          }),
+        );
+      }
       const importSource = resolveImportSourceForScope(
         parsed.source,
         parsed.scope,
@@ -338,6 +411,7 @@ export const importConfigCommand: SlashCommand = {
       'claude-desktop',
       '--scope user',
       '--scope project',
+      '--instructions',
     ];
     return candidates.filter((candidate) => candidate.startsWith(current));
   },

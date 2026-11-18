@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SettingScope } from '../../config/settings.js';
 import {
+  formatClaudeInstructionsImportResult,
   formatClaudeMcpImportResult,
   importConfigCommand,
   parseImportConfigArgs,
@@ -15,6 +16,7 @@ import {
 import { CommandKind } from './types.js';
 import type { ClaudeMcpImportResult } from '../../config/claudeMcpImport.js';
 import { importClaudeMcpServers } from '../../config/claudeMcpImport.js';
+import { importClaudeInstructions } from '../../config/claude-instructions-import.js';
 
 vi.mock('../../config/claudeMcpImport.js', async (importOriginal) => {
   const actual =
@@ -24,6 +26,20 @@ vi.mock('../../config/claudeMcpImport.js', async (importOriginal) => {
     importClaudeMcpServers: vi.fn(),
   };
 });
+
+vi.mock(
+  '../../config/claude-instructions-import.js',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../../config/claude-instructions-import.js')
+      >();
+    return {
+      ...actual,
+      importClaudeInstructions: vi.fn(),
+    };
+  },
+);
 
 describe('importConfigCommand', () => {
   it('is a built-in command available in all execution modes', () => {
@@ -41,6 +57,7 @@ describe('importConfigCommand', () => {
       source: 'all',
       sourceExplicit: false,
       scope: 'user',
+      instructions: false,
       help: false,
     });
   });
@@ -50,12 +67,24 @@ describe('importConfigCommand', () => {
       source: 'claude-code',
       sourceExplicit: true,
       scope: 'project',
+      instructions: false,
       help: false,
     });
     expect(parseImportConfigArgs('--from=desktop -s user')).toEqual({
       source: 'claude-desktop',
       sourceExplicit: true,
       scope: 'user',
+      instructions: false,
+      help: false,
+    });
+  });
+
+  it('parses the --instructions flag with a scope', () => {
+    expect(parseImportConfigArgs('--instructions --scope project')).toEqual({
+      source: 'all',
+      sourceExplicit: false,
+      scope: 'project',
+      instructions: true,
       help: false,
     });
   });
@@ -174,5 +203,70 @@ describe('importConfigCommand', () => {
     expect(message.content).toContain('No new Claude MCP servers imported');
     expect(message.content).toContain('Skipped existing server(s): filesystem');
     expect(message.content).toContain('Warnings:');
+  });
+
+  it('imports instructions when --instructions is passed', async () => {
+    const action = importConfigCommand.action;
+    if (!action) throw new Error('Expected import-config action.');
+
+    vi.mocked(importClaudeInstructions).mockReturnValue({
+      scope: 'project',
+      sourcePath: '/tmp/project/CLAUDE.md',
+      targetPath: '/tmp/project/QWEN.md',
+      action: 'created',
+      checkedPaths: ['/tmp/project/CLAUDE.md'],
+    });
+
+    const result = await action(
+      {
+        services: {
+          settings: {} as never,
+          config: { getTargetDir: vi.fn(() => '/tmp/project') } as never,
+          logger: null,
+        },
+      } as never,
+      '--instructions --scope project',
+    );
+
+    expect(importClaudeInstructions).toHaveBeenCalledWith({
+      scope: 'project',
+      cwd: '/tmp/project',
+    });
+    expect(importClaudeMcpServers).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      type: 'message',
+      content: expect.stringContaining('/tmp/project/QWEN.md'),
+    });
+  });
+
+  it('formats created, already-imported and no-source outcomes', () => {
+    const created = formatClaudeInstructionsImportResult({
+      scope: 'user',
+      sourcePath: '/home/u/.claude/CLAUDE.md',
+      targetPath: '/home/u/.qwen/QWEN.md',
+      action: 'created',
+      checkedPaths: ['/home/u/.claude/CLAUDE.md'],
+    });
+    expect(created.messageType).toBe('info');
+    expect(created.content).toContain('/home/u/.qwen/QWEN.md');
+
+    const already = formatClaudeInstructionsImportResult({
+      scope: 'user',
+      sourcePath: '/home/u/.claude/CLAUDE.md',
+      targetPath: '/home/u/.qwen/QWEN.md',
+      action: 'already-imported',
+      checkedPaths: ['/home/u/.claude/CLAUDE.md'],
+    });
+    expect(already.content).toContain('already present');
+
+    const missing = formatClaudeInstructionsImportResult({
+      scope: 'project',
+      sourcePath: '/p/CLAUDE.md',
+      targetPath: '/p/QWEN.md',
+      action: 'no-source',
+      checkedPaths: ['/p/CLAUDE.md', '/p/.claude/CLAUDE.md'],
+    });
+    expect(missing.messageType).toBe('warning');
+    expect(missing.content).toContain('/p/.claude/CLAUDE.md');
   });
 });

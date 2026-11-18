@@ -1457,6 +1457,12 @@ export default {
     'Consolidate managed auto-memory topic files.',
   'Import MCP servers from Claude configs':
     'Import MCP servers from Claude configs',
+  'Imported Claude instructions into {{targetPath}} ({{scope}} scope).':
+    'Imported Claude instructions into {{targetPath}} ({{scope}} scope).',
+  'Claude instructions are already present in {{targetPath}}; nothing changed.':
+    'Claude instructions are already present in {{targetPath}}; nothing changed.',
+  'No Claude instructions found. Checked: {{paths}}':
+    'No Claude instructions found. Checked: {{paths}}',
   'Open MCP management dialog': 'Open MCP management dialog',
   'Could not retrieve tool registry.': 'Could not retrieve tool registry.',
   "Successfully authenticated and refreshed tools for '{{name}}'.":
