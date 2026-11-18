@@ -1028,11 +1028,15 @@ describe('package scripts', () => {
     );
 
     // A post-merge run is the only witness of a regression on main, so
-    // consecutive merges must not cancel each other.
+    // consecutive merges must not cancel each other. `cancel-in-progress`
+    // alone does not do that: the next push cancels the *pending* run of a
+    // shared per-ref group, so the push arm must key on the commit.
     expect(workflow.concurrency['cancel-in-progress']).toBe(
       "${{ github.event_name == 'pull_request' }}",
     );
-
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || github.ref }}",
+    );
     // Substring check on the raw job text: an exact `step.run` match is
     // bypassed by any other spelling of a build step (block scalar,
     // compound command).

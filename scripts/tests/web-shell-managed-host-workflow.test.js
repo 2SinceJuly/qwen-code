@@ -116,6 +116,42 @@ describe('managed host build lane', () => {
     expect(workflow.concurrency['cancel-in-progress']).toBe(
       "${{ github.event_name == 'pull_request' }}",
     );
+    // `cancel-in-progress` only protects a *running* run. GitHub keeps one
+    // pending run per group and cancels it on the next arrival, so a per-ref
+    // group still loses the queued witness; the push arm must key on the
+    // commit instead.
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || github.ref }}",
+    );
+    // Resolve the real expression rather than trusting the string: a queued
+    // post-merge run must land in a group of its own.
+    const group = (github) =>
+      workflow.concurrency.group.replace(/\$\{\{(.*?)\}\}/g, (_, expression) =>
+        new Function('github', `return (${expression});`)(github),
+      );
+    const base = {
+      workflow: 'Web-shell Managed Host',
+      ref: 'refs/heads/main',
+      event: { pull_request: { number: null } },
+    };
+    expect(group({ ...base, event_name: 'push', sha: 'aaa' })).not.toBe(
+      group({ ...base, event_name: 'push', sha: 'bbb' }),
+    );
+    expect(
+      group({
+        ...base,
+        event_name: 'pull_request',
+        sha: 'aaa',
+        event: { pull_request: { number: 7 } },
+      }),
+    ).toBe(
+      group({
+        ...base,
+        event_name: 'pull_request',
+        sha: 'bbb',
+        event: { pull_request: { number: 7 } },
+      }),
+    );
   });
 
   it('prepares the disposable pool without changing hosted setup', () => {

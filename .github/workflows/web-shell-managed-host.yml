@@ -56,8 +56,11 @@ permissions:
 
 concurrency:
   # Post-merge runs must not cancel each other: a cancelled push run would
-  # erase the only post-merge witness of a regression.
-  group: '${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}'
+  # erase the only post-merge witness of a regression. GitHub keeps one
+  # running and one pending run per group, and a new arrival cancels the
+  # pending one regardless of `cancel-in-progress`, so push runs are keyed
+  # per commit instead of per ref; see managed-agent-gate.yml.
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || github.ref }}"
   cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 defaults:
