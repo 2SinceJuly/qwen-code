@@ -167,18 +167,9 @@ export function WorkspaceArtifactLibraryPage({
   );
 
   const selectedRow = useMemo(() => {
-    if (selectedKey) {
-      const match = filteredRows.find((row) => row.key === selectedKey);
-      if (match) return match;
-    }
-    return visibleRows.find((row) => {
-      const dispatch = classifyWorkspaceArtifactDispatch(
-        row.artifact,
-        checkSessionLive(row.sessionId),
-      );
-      return dispatch.kind !== 'jump_web_preview_snapshot';
-    });
-  }, [checkSessionLive, filteredRows, selectedKey, visibleRows]);
+    if (!selectedKey) return undefined;
+    return filteredRows.find((row) => row.key === selectedKey);
+  }, [filteredRows, selectedKey]);
 
   const handleRowActivate = (row: WorkspaceArtifactLibraryRow) => {
     const dispatch = classifyWorkspaceArtifactDispatch(

@@ -652,13 +652,13 @@ describe('WorkspaceArtifactLibraryPage & dispatch contracts', () => {
     expect(firstSessionBtn.textContent).toContain('Session 12345678');
     expect(firstSessionBtn.textContent).toContain('Archived');
 
-    // Metadata-only managed artifact is selected first and rendered from descriptor
+    // Metadata-only managed artifact is listed but nothing is selected until a click
     expect(onJumpToSessionArtifact).not.toHaveBeenCalled();
     expect(
       container.querySelector(
         '[data-testid="workspace-artifact-library-detail"]',
-      )?.textContent,
-    ).toContain('Descriptor-only output');
+      ),
+    ).toBeNull();
 
     // Select the workspace-storage row -> previews via stat + readWorkspaceFile without session jump
     const secondRowBtn = container
@@ -753,7 +753,7 @@ describe('WorkspaceArtifactLibraryPage & dispatch contracts', () => {
     expect(onOpenSession).toHaveBeenCalledWith('sess-b', 'active');
   });
 
-  it('does not jump on passive auto-selection of a stale-live snapshot, jumps when the user clicks it and the content route returns 404 session_not_found, jumps immediately for cold-but-active snapshots, and surfaces 404 artifact_snapshot_unavailable without jumping (S2 & R2-6)', async () => {
+  it('opens with the list and no pre-selected row, jumps when the user clicks a stale-live snapshot whose content route returns 404 session_not_found, jumps immediately for cold-but-active snapshots, and surfaces 404 artifact_snapshot_unavailable without jumping (S2 & R2-6)', async () => {
     const onOpenSession = vi.fn();
     const onJumpToSessionArtifact = vi.fn();
     const coldActiveSnapshot = makeArtifact('snap-cold-active', {
@@ -833,18 +833,14 @@ describe('WorkspaceArtifactLibraryPage & dispatch contracts', () => {
     });
     await flush();
 
-    // R2-5: Passive auto-selection must skip the cold jump row ('snap-cold-active')
-    // and select the next openable row ('snap-race'), without jumping out of the library.
-    expect(mocks.readSessionArtifactContent).toHaveBeenLastCalledWith(
-      'sess-live',
-      'snap-race',
-      expect.any(Object),
-    );
-    expect(mocks.readSessionArtifactContent).not.toHaveBeenCalledWith(
-      'sess-cold-active',
-      expect.anything(),
-      expect.anything(),
-    );
+    // No row is selected or previewed until the user clicks one: the library
+    // opens as a browsable list (issue #18508).
+    expect(
+      container.querySelector(
+        '[data-testid="workspace-artifact-library-detail"]',
+      ),
+    ).toBeNull();
+    expect(mocks.readSessionArtifactContent).not.toHaveBeenCalled();
     expect(onJumpToSessionArtifact).not.toHaveBeenCalled();
 
     const rows = container.querySelectorAll(
@@ -892,7 +888,7 @@ describe('WorkspaceArtifactLibraryPage & dispatch contracts', () => {
     );
   });
 
-  it('exercises the production session-catalog store liveness path and subscribeLiveSessions re-render trigger (R1-7)', async () => {
+  it('renders a live-session snapshot inline after the user clicks it, and drops the detail pane once the session leaves the live state (R1-7)', async () => {
     const onJumpToSessionArtifact = vi.fn();
     const store = getSessionCatalogStore(
       mocks.client as unknown as DaemonClient,
@@ -940,35 +936,47 @@ describe('WorkspaceArtifactLibraryPage & dispatch contracts', () => {
     });
     await flush();
 
-    // While live in the store, the snapshot previews inline via readSessionArtifactContent
-    expect(mocks.readSessionArtifactContent).toHaveBeenCalledWith(
-      'sess-store-live',
-      'snap-store',
-      expect.any(Object),
-    );
-    expect(onJumpToSessionArtifact).not.toHaveBeenCalled();
-
-    // Clear live state -> subscribeLiveSessions fires -> re-render drops the
-    // now-cold auto-selected inline detail pane before any click (R1-16)
-    await act(async () => {
-      store.applyLiveState('/work/proj', []);
-    });
+    // Nothing is previewed before a click, even though the session is live
     expect(
       container.querySelector(
         '[data-testid="workspace-artifact-library-detail"]',
       ),
     ).toBeNull();
+    expect(mocks.readSessionArtifactContent).not.toHaveBeenCalled();
+    expect(onJumpToSessionArtifact).not.toHaveBeenCalled();
+
+    // Clicking the live snapshot row previews it inline via readSessionArtifactContent
     const rowBtn = container
       .querySelector('[data-testid="workspace-artifact-library-row"]')
       ?.querySelector('button') as HTMLButtonElement;
     await act(async () => {
       rowBtn.click();
     });
-    expect(onJumpToSessionArtifact).toHaveBeenCalledWith(
+    await flush();
+    expect(mocks.readSessionArtifactContent).toHaveBeenCalledWith(
       'sess-store-live',
       'snap-store',
-      'active',
+      expect.any(Object),
     );
+    expect(onJumpToSessionArtifact).not.toHaveBeenCalled();
+    expect(
+      container.querySelector(
+        '[data-testid="workspace-artifact-library-detail"]',
+      ),
+    ).not.toBeNull();
+
+    // Clear live state -> subscribeLiveSessions fires. The preview is driven by
+    // the click, so it stays mounted; the re-render must not re-select a row or
+    // navigate on its own (issue #18508).
+    await act(async () => {
+      store.applyLiveState('/work/proj', []);
+    });
+    expect(onJumpToSessionArtifact).not.toHaveBeenCalled();
+    expect(
+      container.querySelectorAll(
+        '[data-testid="workspace-artifact-library-detail"]',
+      ),
+    ).toHaveLength(1);
   });
 
   it('distinguishes finished-with-errors wording, renders 409 persistence-unavailable and 503 runtime-unavailable states, and shows the partial banner without empty state when a stream ends without complete (R1-5 & R2-2)', async () => {
